@@ -188,8 +188,7 @@ def get_greedy_bucket_plan(
             ):
                 # merge all_gather
                 assert len(all_gather_list) > 0
-                print("communication_estimation(all_gather_list + [node])", communication_estimation(all_gather_list))
-                merged_all_gather, ag_buffer = merge_allgather(sched, all_gather_list, ag_inv_dep_list)
+                merged_all_gather, ag_buffer = merge_allgather(sched, all_gather_list)
                 merged_ag_wait = merge_ag_wait(
                     sched, ag_wait_list, all_gather_list, ag_buffer
                 )
