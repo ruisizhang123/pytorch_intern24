@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Union
 
 from .. import scheduler
-from ..comm_analysis import estimate_bucketed_nccl_collective_runtime
+from ..comm_analysis import estimate_bucketed_nccl_collective_runtime, get_predicted_node_comm
 from ..config import simplefsdp
 from .bucket import merge_ag_wait, merge_allgather, merge_reducescatter, merge_rs_wait
 from .utils import compute_node_users, get_node_type, NodeType
@@ -144,10 +144,16 @@ def get_greedy_bucket_plan(
     snodes: List["scheduler.BaseSchedulerNode"],
     collective_info_dict: Dict["scheduler.BaseSchedulerNode", CollectiveInfo],
     is_backward: Optional[bool] = False,
+    use_analytical_model: Optional[bool] = False,
 ) -> List["scheduler.BaseSchedulerNode"]:
     """
     Greedy Bucket ALL_GATHER and reduce_scatter
     """
+    if use_analytical_model:
+        communication_estimation = estimate_bucketed_nccl_collective_runtime
+    else:
+        communication_estimation = get_predicted_node_comm
+
     result_list = []
     all_gather_list = []
     ag_inv_dep_list = []
@@ -174,7 +180,7 @@ def get_greedy_bucket_plan(
             if greedy_check(
                 current_comp,
                 current_mem,
-                estimate_bucketed_nccl_collective_runtime(all_gather_list + [node]),
+                communication_estimation(all_gather_list + [node]),
                 collective_info_dict[node].compute_memory,
                 memory_constraint,
                 is_first_ag,
@@ -182,7 +188,8 @@ def get_greedy_bucket_plan(
             ):
                 # merge all_gather
                 assert len(all_gather_list) > 0
-                merged_all_gather, ag_buffer = merge_allgather(sched, all_gather_list)
+                print("communication_estimation(all_gather_list + [node])", communication_estimation(all_gather_list))
+                merged_all_gather, ag_buffer = merge_allgather(sched, all_gather_list, ag_inv_dep_list)
                 merged_ag_wait = merge_ag_wait(
                     sched, ag_wait_list, all_gather_list, ag_buffer
                 )
@@ -225,7 +232,7 @@ def get_greedy_bucket_plan(
                     rs_wait_list = collective_info_dict[node].rs_wait
                     rs_wait_dep_list = collective_info_dict[node].rs_wait_dep
                     last_rs = current_rs
-                    current_rs = estimate_bucketed_nccl_collective_runtime(
+                    current_rs = communication_estimation(
                         reduce_scatter_list, is_ag=False
                     )
             else:
@@ -248,7 +255,7 @@ def get_greedy_bucket_plan(
                     )
                     rs_wait_list.extend(collective_info_dict[node].rs_wait)
                     rs_wait_dep_list.extend(collective_info_dict[node].rs_wait_dep)
-                    current_rs = estimate_bucketed_nccl_collective_runtime(
+                    current_rs = communication_estimation(
                         reduce_scatter_list, is_ag=False
                     )
 
@@ -281,12 +288,13 @@ def bucket_by_greedy(
     snodes: List["scheduler.BaseSchedulerNode"],
     run_time_dict: Dict[str, List[Union[str, float]]],
     is_backward: Optional[bool] = False,
+    use_analytical_model: Optional[bool] = False,
 ) -> List["scheduler.BaseSchedulerNode"]:
     """
     Greedy bucket ALL_GATHER and ag_wait
     """
     collective_info_dict = get_collective_info(snodes, run_time_dict, is_backward)
     result_list = get_greedy_bucket_plan(
-        sched, snodes, collective_info_dict, is_backward
+        sched, snodes, collective_info_dict, is_backward, use_analytical_model
     )
     return result_list
